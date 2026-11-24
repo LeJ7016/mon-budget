@@ -1,9 +1,9 @@
 // Mon Budget — service worker : fonctionnement hors ligne
-const V = 'mon-budget-v2';
+const V = 'mon-budget-v3';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(V).then(c => c.addAll(CORE)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(V).then(c => c.addAll(CORE.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -25,7 +25,7 @@ self.addEventListener('fetch', e => {
   if (r.mode === 'navigate') {
     e.respondWith((async () => {
       const cached = await caches.match('./index.html');
-      const net = fetch(r).then(res => put('./index.html', res));
+      const net = fetch(r.url, { cache: 'no-cache' }).then(res => put('./index.html', res));
       if (!cached) return net;
       return Promise.race([net.catch(() => cached), new Promise(ok => setTimeout(() => ok(cached), 2500))]);
     })());
