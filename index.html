@@ -68,6 +68,10 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke
 .welcome{background:var(--sf);border-radius:18px;padding:18px;margin-top:6px}
 .welcome b{display:block;font:600 19px "Space Grotesk",sans-serif;margin-bottom:6px}
 .welcome p{margin:0 0 14px;color:var(--mut)}
+.welcome+.welcome,.welcome+h2{margin-top:14px}
+.welcome button:not(.primary){background:var(--bg)}
+.abbar{display:block;width:100%;border-radius:0;background:var(--a);color:#1a1000;padding:calc(10px + env(safe-area-inset-top)) 16px 10px;font-weight:600;min-height:48px}
+.badge.off{background:var(--a);color:#1a1000}
 
 /* Opérations */
 .tx{display:flex;width:100%;align-items:center;gap:12px;background:none;border-radius:0;padding:10px 2px;text-align:left;font-weight:400;min-height:60px;border-bottom:1px solid var(--line)}
@@ -291,7 +295,37 @@ function load(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){return 
 let S=load(KEY);if(!S||!Array.isArray(S.tx))S=fresh();
 S.budget=S.budget||{on:false,total:0,cats:{}};S.last=S.last||{};
 let L=load(LKEY);if(!L||!L.hash)L=null;
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){toast("Impossible d'enregistrer sur ce téléphone",{warn:1})}}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){toast("Impossible d'enregistrer sur ce téléphone",{warn:1})}autoBackup()}
+
+/* ---------- Sauvegarde automatique dans un fichier ---------- */
+const AB_OK='showSaveFilePicker' in window;
+const AB={handle:null,status:'off',last:+(load('monbudget.ab')||0)};
+const idb=(mode,fn)=>new Promise((res,rej)=>{let r;try{r=indexedDB.open('monbudget',1)}catch(e){return rej(e)}
+  r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onerror=()=>rej(r.error);
+  r.onsuccess=()=>{try{const tx=r.result.transaction('kv',mode),q=fn(tx.objectStore('kv'));tx.oncomplete=()=>res(q&&q.result);tx.onerror=()=>rej(tx.error)}catch(e){rej(e)}}});
+const kvGet=k=>idb('readonly',s=>s.get(k)),kvSet=(k,v)=>idb('readwrite',s=>s.put(v,k)),kvDel=k=>idb('readwrite',s=>s.delete(k));
+let abTimer;
+function autoBackup(){if(!AB.handle)return;clearTimeout(abTimer);abTimer=setTimeout(()=>writeBackup(false),500)}
+function setAB(st){const ch=AB.status!==st;AB.status=st;if(ch||curV==='reglages')render()}
+async function writeBackup(interactive){
+  if(!AB.handle)return false;
+  try{let p=await AB.handle.queryPermission({mode:'readwrite'});
+    if(p!=='granted'&&interactive)p=await AB.handle.requestPermission({mode:'readwrite'});
+    if(p!=='granted'){setAB('paused');return false}
+    const w=await AB.handle.createWritable();await w.write(JSON.stringify(S));await w.close();
+    AB.last=Date.now();try{localStorage.setItem('monbudget.ab',String(AB.last))}catch(e){}setAB('ok');return true}
+  catch(e){setAB(e&&e.name==='NotAllowedError'?'paused':'error');return false}}
+async function abPick(){
+  try{const h=await window.showSaveFilePicker({suggestedName:'mon-budget-sauvegarde.json',types:[{description:'Sauvegarde Mon Budget',accept:{'application/json':['.json']}}]});
+    AB.handle=h;const ok=await writeBackup(true);try{await kvSet('abHandle',h)}catch(e){}
+    if(ok)toast('Sauvegarde automatique activée');else toast("Le fichier choisi ne peut pas être modifié. Essayez un autre emplacement.",{warn:1})}
+  catch(e){if(!e||e.name!=='AbortError')toast("Impossible d'activer la sauvegarde automatique ici",{warn:1})}
+  render()}
+async function abOff(){AB.handle=null;AB.status='off';try{await kvDel('abHandle')}catch(e){}render();toast('Sauvegarde automatique désactivée')}
+async function abResume(){if(AB.status==='error')return abPick();if(await writeBackup(true))toast('Sauvegarde automatique reprise')}
+function whenLabel(ts){if(!ts)return'jamais';const d=new Date(ts),hm=pad(d.getHours())+'h'+pad(d.getMinutes());return dayLabel(iso(d)).replace("Aujourd'hui","aujourd'hui").replace('Hier','hier')+' à '+hm}
+async function abInit(){if(!AB_OK)return;try{const h=await kvGet('abHandle');if(!h)return;AB.handle=h;
+  const p=await h.queryPermission({mode:'readwrite'});AB.status=p==='granted'?'ok':'paused';render()}catch(e){}}
 function saveLock(){try{L?localStorage.setItem(LKEY,JSON.stringify(L)):localStorage.removeItem(LKEY)}catch(e){}}
 try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
 
@@ -319,6 +353,7 @@ function vHome(){
   let h=`<section class="hero"><div class="brand"><img src="icons/icon-192.png" alt="">Mon Budget</div><div class="hl">Solde total</div><div class="big">${bal<0?'−':''}${fmtN(bal)}<small> FCFA</small></div>${byPay.length>1?`<div class="split">${byPay.map(o=>`<span><small>${esc(o.p.name)}</small>${o.v<0?'−':''}${fmtN(o.v)}</span>`).join('')}</div>`:''}</section><div class="band">`;
   if(deferred&&!standalone())h+=`<div class="welcome"><b>Installer l'application</b><p>Ajoutez Mon Budget à l'écran d'accueil pour l'ouvrir comme une vraie application, même sans Internet.</p><button class="primary" id="installBtn">Installer</button></div>`;
   if(!S.tx.length)return h+`<div class="welcome"><b>Bienvenue !</b><p>Touchez le bouton + pour noter votre première dépense ou entrée. Tout reste sur ce téléphone et fonctionne sans Internet.</p><button class="primary" id="goAdd">Ajouter une opération</button></div></div>`;
+  if(AB_OK&&!AB.handle&&!S.abLater&&S.tx.length>=3)h+=`<div class="welcome"><b>Protégez vos données</b><p>Activez la sauvegarde automatique : une copie de vos comptes sera mise à jour dans un fichier après chaque modification.</p><div class="btns"><button class="primary" id="abOn">Activer</button><button id="abLater">Plus tard</button></div></div>`;
   h+=`<h2>${cap(MOIS[m])} ${y}</h2>`+sumCard(sum(mtx,'in'),sum(mtx,'out'));
   if(S.budget.on&&S.budget.total)h+=meter(sum(mtx,'out'),S.budget.total,'Budget du mois');
   const td=S.tx.filter(x=>x.date===today()).sort(cmp),tout=sum(td,'out');
@@ -411,16 +446,25 @@ function lockCard(){
   return `<section class="card"><h2>Verrouillage <span class="badge">Activé</span></h2><p class="mut">${L.type==='pin'?`Code à ${L.len} chiffres`:'Schéma'}${L.bio?' + empreinte / visage':''}. L'application se verrouille à chaque ouverture et après 1 minute en arrière-plan.${BIO_OK?'':" (Empreinte / visage non disponible dans ce navigateur.)"}</p><div class="btns">
   ${BIO_OK?(L.bio?`<button data-lock="biooff">Désactiver l'empreinte / visage</button>`:`<button class="primary" data-lock="bioon">Activer l'empreinte / visage</button>`):''}
   <button data-lock="pin">${L.type==='pin'?'Changer le code':'Utiliser un code à la place'}</button><button data-lock="pattern">${L.type==='pattern'?'Changer le schéma':'Utiliser un schéma à la place'}</button><button data-lock="off">Désactiver le verrouillage</button></div></section>`}
+function abCard(){
+  const badge=AB.handle&&AB.status==='ok'?' <span class="badge">Activée</span>':AB.handle?' <span class="badge off">En pause</span>':'';
+  let b;
+  if(!AB_OK)b=`<p class="mut">Ce navigateur ne permet pas d'écrire automatiquement dans un fichier. Ouvrez Mon Budget avec Google Chrome pour l'activer. En attendant, utilisez « Exporter la sauvegarde » ci-dessous.</p>`;
+  else if(!AB.handle)b=`<p class="mut">Choisissez une seule fois un fichier sur votre téléphone, de préférence dans Google Drive ou dans Documents. Il sera ensuite mis à jour automatiquement après chaque modification : ajout, correction, suppression, budget, catégorie.</p><button class="primary" id="abOn">Activer la sauvegarde automatique</button>`;
+  else b=`<p class="mut">${AB.status==='ok'?'Le fichier de sauvegarde est mis à jour après chaque modification.':AB.status==='error'?"Le fichier de sauvegarde est introuvable ou n'est plus modifiable. Choisissez-en un nouveau.":"Le téléphone demande votre accord pour continuer à écrire dans le fichier (cela arrive après un redémarrage de l'application)."} Dernière sauvegarde : ${whenLabel(AB.last)}.</p>
+  <div class="btns">${AB.status!=='ok'?`<button class="primary" id="abResume">${AB.status==='error'?'Choisir un fichier':'Reprendre la sauvegarde'}</button>`:`<button id="abNow">Sauvegarder maintenant</button>`}<button id="abPick">Changer de fichier</button><button id="abOff">Désactiver</button></div>`;
+  return `<section class="card"><h2>Sauvegarde automatique${badge}</h2>${b}</section>`}
+function abBanner(){return AB.handle&&AB.status!=='ok'?`<button class="abbar" id="abResume">${AB.status==='error'?'Sauvegarde automatique interrompue · Touchez pour choisir un fichier':'Sauvegarde automatique en pause · Touchez pour la reprendre'}</button>`:''}
 function vSet(){
   const inst=deferred&&!standalone()?`<button class="primary" id="installBtn">Installer Mon Budget</button>`:standalone()?`<p class="mut">L'application est installée sur ce téléphone.</p>`:`<p class="mut">Dans Chrome ou Samsung Internet, ouvrez le menu (⋮ ou ≡) puis « Ajouter à l'écran d'accueil » ou « Installer l'application ».</p>`;
-  return `<div class="band top"><h1>Réglages</h1>${lockCard()}
+  return `<div class="band top"><h1>Réglages</h1>${lockCard()}${abCard()}
   <section class="card"><h2>Partager l'application</h2><p class="mut">Envoyez le lien (WhatsApp, SMS…) à une autre personne. Chaque téléphone garde ses propres données : elle commencera avec une application vide et ne verra jamais vos opérations.</p><button class="primary" id="shareBtn">Partager le lien</button></section>
   <section class="card"><h2>Installer sur ce téléphone</h2>${inst}</section>
   ${editList('out','Catégories de dépenses',S.cats.filter(c=>c.type==='out'))}${editList('in',"Catégories d'entrées",S.cats.filter(c=>c.type==='in'))}${editList('pay','Moyens de paiement',S.pays)}
-  <section class="card"><h2>Sauvegarde</h2><p class="mut">Vos données restent uniquement sur ce téléphone. Exportez une sauvegarde de temps en temps (par exemple chaque mois) et gardez-la dans Google Drive ou WhatsApp : elle permet de tout récupérer sur un nouveau téléphone.</p>
+  <section class="card"><h2>Sauvegarde manuelle</h2><p class="mut">Exportez une copie quand vous voulez, ou restaurez une sauvegarde (un fichier exporté ou le fichier de sauvegarde automatique) sur un nouveau téléphone.</p>
   <div class="btns"><button id="expBtn">Exporter la sauvegarde</button><label class="btn">Importer une sauvegarde<input type="file" id="impFile" accept=".json,application/json" hidden></label><button id="csvBtn">Exporter pour Excel (.csv)</button></div></section>
   <section class="card warnz"><h2>Effacer toutes les données</h2><p class="mut">Supprime toutes les opérations, catégories ajoutées, budgets et le verrouillage de ce téléphone.</p><button class="danger-btn" id="wipeBtn">Tout effacer</button></section>
-  <p class="ver mut">Mon Budget · version 1.0 · ${S.tx.length} opération${S.tx.length>1?'s':''} enregistrée${S.tx.length>1?'s':''}</p></div>`}
+  <p class="ver mut">Mon Budget · version 1.1 · ${S.tx.length} opération${S.tx.length>1?'s':''} enregistrée${S.tx.length>1?'s':''}</p></div>`}
 function addItem(kind,name){name=String(name||'').trim().slice(0,30);if(!name)return null;
   if(kind==='pay'){if(S.pays.some(p=>p.name.toLowerCase()===name.toLowerCase())){toast('Ce moyen de paiement existe déjà');return null}const p={id:uid(),name};S.pays.push(p);save();return p.id}
   if(S.cats.some(c=>c.type===kind&&c.name.toLowerCase()===name.toLowerCase())){toast('Cette catégorie existe déjà');return null}
@@ -459,7 +503,7 @@ function render(){
   if(!unlocked)return;
   let v=location.hash.slice(1);if(v==='ajouter'){history.replaceState(null,'','#accueil');v='accueil';setTimeout(()=>openTx(),60)}
   if(!VIEWS[v])v='accueil';const changed=v!==curV;curV=v;
-  ro.disconnect();CH=null;V.innerHTML=VIEWS[v]();
+  ro.disconnect();CH=null;V.innerHTML=abBanner()+VIEWS[v]();
   $$('.tabs a').forEach(a=>a.getAttribute('href')==='#'+v?a.setAttribute('aria-current','page'):a.removeAttribute('aria-current'));
   const s=$('#chart');if(s)ro.observe(s);if(changed)scrollTo(0,0);
 }
@@ -473,7 +517,7 @@ V.addEventListener('click',e=>{const t=e.target.closest('button,[data-i]');if(!t
   if(t.dataset.i!=null&&CH){CH.go(+t.dataset.i);return render()}
   if(t.dataset.del)return delItem(t.dataset.del,t.dataset.id);
   if(t.dataset.lock)return lockAction(t.dataset.lock);
-  const A={shareBtn:share,installBtn:install,expBtn:exportJSON,csvBtn:exportCSV,wipeBtn:wipe,goAdd:()=>openTx()};if(A[t.id])A[t.id]()});
+  const A={shareBtn:share,installBtn:install,expBtn:exportJSON,csvBtn:exportCSV,wipeBtn:wipe,goAdd:()=>openTx(),abOn:abPick,abPick:abPick,abOff:abOff,abResume:abResume,abNow:async()=>{if(await writeBackup(true))toast('Sauvegarde effectuée')},abLater:()=>{S.abLater=1;save();render()}};if(A[t.id])A[t.id]()});
 V.addEventListener('change',e=>{const t=e.target;
   if(t.id==='bOn'){S.budget.on=t.checked;save();return render()}
   if(t.id==='bTot'){S.budget.total=num(t.value);save();return render()}
@@ -602,6 +646,7 @@ addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferred=e;if(curV
 addEventListener('appinstalled',()=>{deferred=null;render();toast('Mon Budget est installée sur ce téléphone')});
 bioAvail().then(v=>{BIO_OK=v;if(curV==='reglages')render();if(v&&L&&L.bio&&LK.mode==='unlock'){$('#lkBio').hidden=false;tryBio()}});
 if(L)lockUI('unlock',L.type,()=>{unlocked=true;render()});else render();
+abInit();
 if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol))navigator.serviceWorker.register('sw.js').catch(()=>{});
 }
 </script>

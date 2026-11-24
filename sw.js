@@ -1,5 +1,5 @@
 // Mon Budget — service worker : fonctionnement hors ligne
-const V = 'mon-budget-v1';
+const V = 'mon-budget-v2';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png'];
 
 self.addEventListener('install', e => {
@@ -21,12 +21,14 @@ self.addEventListener('fetch', e => {
   if (r.method !== 'GET') return;
   const u = new URL(r.url);
 
-  // Page : réponse immédiate depuis le cache, mise à jour en arrière-plan
+  // Page : version en ligne si elle répond vite, sinon copie hors ligne
   if (r.mode === 'navigate') {
-    e.respondWith(caches.match('./index.html').then(m => {
-      const net = fetch(r).then(res => put('./index.html', res)).catch(() => m);
-      return m || net;
-    }));
+    e.respondWith((async () => {
+      const cached = await caches.match('./index.html');
+      const net = fetch(r).then(res => put('./index.html', res));
+      if (!cached) return net;
+      return Promise.race([net.catch(() => cached), new Promise(ok => setTimeout(() => ok(cached), 2500))]);
+    })());
     return;
   }
 
