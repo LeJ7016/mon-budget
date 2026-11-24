@@ -209,6 +209,17 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke
 .lk-act button{min-width:220px}
 .shake{animation:shk .35s}
 @keyframes shk{20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
+.auth{z-index:45}
+.auth form{text-align:left;margin-top:18px}
+.auth .fld input{margin-top:6px;color:var(--ink);font-weight:400}
+.auth .primary{width:100%;margin-top:16px}
+.pw{position:relative;display:block}
+.pw button{position:absolute;right:4px;bottom:1px;min-height:44px;background:none;color:var(--g);font-size:14px;padding:6px 10px}
+.aerr{min-height:22px;margin:12px 0 0;font-size:14px;font-weight:600;color:var(--r)}
+.aerr.ok{color:var(--g)}
+.lk-logo img{width:64px;height:64px;border-radius:20px}
+.sync{margin-left:auto;font:500 12px Inter,system-ui,sans-serif;background:rgba(255,255,255,.18);border-radius:99px;padding:4px 10px;white-space:nowrap}
+.acc b{word-break:break-all}
 @media (prefers-reduced-motion:reduce){.panel,.scrim,.toast,.pd{transition:none}.shake{animation:none}}
 </style>
 </head>
@@ -254,6 +265,27 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke
   </div>
 </div>
 
+<div class="lock auth" id="auth" hidden>
+  <div class="lk-in">
+    <div class="lk-logo"><img src="icons/icon-192.png" alt=""></div>
+    <h1>Mon Budget</h1>
+    <p id="auS" class="mut" style="margin:8px 0 18px">Connectez-vous pour retrouver vos comptes sur tous vos téléphones.</p>
+    <div class="seg" id="auSeg"><button type="button" data-m="in" aria-pressed="true">Connexion</button><button type="button" data-m="up" aria-pressed="false">Créer un compte</button></div>
+    <form id="auForm" novalidate>
+      <label class="fld">Adresse e-mail<input id="auEmail" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="vous@exemple.com"></label>
+      <label class="fld pw">Mot de passe<input id="auPass" type="password" autocomplete="current-password" placeholder="6 caractères minimum"><button type="button" id="auShow">Afficher</button></label>
+      <label class="fld" id="auPass2W" hidden>Confirmez le mot de passe<input id="auPass2" type="password" autocomplete="new-password"></label>
+      <p class="aerr" id="auErr" role="alert"></p>
+      <button class="primary" id="auGo" type="submit">Se connecter</button>
+    </form>
+    <div class="lk-act">
+      <button type="button" class="link" id="auForgot">Mot de passe oublié ?</button>
+      <button type="button" class="link" id="auLocal" style="color:var(--mut)">Utiliser sans compte (ce téléphone uniquement)</button>
+      <button type="button" id="auClose" hidden>Annuler</button>
+    </div>
+  </div>
+</div>
+
 <div class="dlg" id="dlg" hidden role="dialog" aria-modal="true">
   <div class="dlgbox"><p id="dlgMsg"></p><input id="dlgIn" maxlength="30" hidden>
     <div class="actions"><button type="button" id="dlgNo">Annuler</button><button type="button" class="primary" id="dlgOk">OK</button></div></div>
@@ -285,6 +317,7 @@ function dayLabel(s){const d=parse(s),t=new Date(),y=new Date();y.setDate(t.getD
 
 /* ---------- Données (restent sur le téléphone) ---------- */
 const KEY='monbudget.v1',LKEY='monbudget.lock';
+const C={A:null,Au:null,F:null,auth:null,db:null,user:null,unsubs:[],known:new Map(),knownMeta:null,metaReady:false,pending:false,failed:false};
 function fresh(){
   const o=['Nourriture','Transport','Logement','Études & fournitures','Crédit & Internet','Santé','Loisirs','Famille & dons','Divers'];
   const i=['Famille','Bourse','Salaire / Alternance','Petits travaux','Cadeaux','Autres revenus'];
@@ -292,10 +325,12 @@ function fresh(){
     pays:['Espèces','Orange Money','MTN MoMo','Banque'].map((n,k)=>({id:'p'+k,name:n})),budget:{on:false,total:0,cats:{}},last:{}}
 }
 function load(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}}
+let MODE=load('monbudget.mode');
 let S=load(KEY);if(!S||!Array.isArray(S.tx))S=fresh();
 S.budget=S.budget||{on:false,total:0,cats:{}};S.last=S.last||{};
 let L=load(LKEY);if(!L||!L.hash)L=null;
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){toast("Impossible d'enregistrer sur ce téléphone",{warn:1})}autoBackup()}
+function saveLocal(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){toast("Impossible d'enregistrer sur ce téléphone",{warn:1})}autoBackup()}
+function save(){if(MODE==='cloud'&&!C.user)S.dirty=1;saveLocal();pushDiff()}
 
 /* ---------- Sauvegarde automatique dans un fichier ---------- */
 const AB_OK='showSaveFilePicker' in window;
@@ -350,10 +385,10 @@ function vHome(){
   const t=new Date(),y=t.getFullYear(),m=t.getMonth(),mk=monthKey(y,m);
   const mtx=S.tx.filter(x=>x.date.startsWith(mk)),bal=sum(S.tx,'in')-sum(S.tx,'out');
   const byPay=S.pays.map(p=>{const a=S.tx.filter(x=>x.pay===p.id);return{p,v:sum(a,'in')-sum(a,'out'),n:a.length}}).filter(o=>o.n);
-  let h=`<section class="hero"><div class="brand"><img src="icons/icon-192.png" alt="">Mon Budget</div><div class="hl">Solde total</div><div class="big">${bal<0?'−':''}${fmtN(bal)}<small> FCFA</small></div>${byPay.length>1?`<div class="split">${byPay.map(o=>`<span><small>${esc(o.p.name)}</small>${o.v<0?'−':''}${fmtN(o.v)}</span>`).join('')}</div>`:''}</section><div class="band">`;
+  let h=`<section class="hero"><div class="brand"><img src="icons/icon-192.png" alt="">Mon Budget${MODE==='cloud'?`<span class="sync">${esc(syncLabel())}</span>`:''}</div><div class="hl">Solde total</div><div class="big">${bal<0?'−':''}${fmtN(bal)}<small> FCFA</small></div>${byPay.length>1?`<div class="split">${byPay.map(o=>`<span><small>${esc(o.p.name)}</small>${o.v<0?'−':''}${fmtN(o.v)}</span>`).join('')}</div>`:''}</section><div class="band">`;
   if(deferred&&!standalone())h+=`<div class="welcome"><b>Installer l'application</b><p>Ajoutez Mon Budget à l'écran d'accueil pour l'ouvrir comme une vraie application, même sans Internet.</p><button class="primary" id="installBtn">Installer</button></div>`;
   if(!S.tx.length)return h+`<div class="welcome"><b>Bienvenue !</b><p>Touchez le bouton + pour noter votre première dépense ou entrée. Tout reste sur ce téléphone et fonctionne sans Internet.</p><button class="primary" id="goAdd">Ajouter une opération</button></div></div>`;
-  if(AB_OK&&!AB.handle&&!S.abLater&&S.tx.length>=3)h+=`<div class="welcome"><b>Protégez vos données</b><p>Activez la sauvegarde automatique : une copie de vos comptes sera mise à jour dans un fichier après chaque modification.</p><div class="btns"><button class="primary" id="abOn">Activer</button><button id="abLater">Plus tard</button></div></div>`;
+  if(AB_OK&&MODE!=='cloud'&&!AB.handle&&!S.abLater&&S.tx.length>=3)h+=`<div class="welcome"><b>Protégez vos données</b><p>Activez la sauvegarde automatique : une copie de vos comptes sera mise à jour dans un fichier après chaque modification.</p><div class="btns"><button class="primary" id="abOn">Activer</button><button id="abLater">Plus tard</button></div></div>`;
   h+=`<h2>${cap(MOIS[m])} ${y}</h2>`+sumCard(sum(mtx,'in'),sum(mtx,'out'));
   if(S.budget.on&&S.budget.total)h+=meter(sum(mtx,'out'),S.budget.total,'Budget du mois');
   const td=S.tx.filter(x=>x.date===today()).sort(cmp),tout=sum(td,'out');
@@ -440,6 +475,11 @@ let BIO_OK=false;
 function editList(kind,title,items){
   return `<section class="card"><h2>${title}</h2>${items.map(it=>`<div class="erow">${kind!=='pay'?`<i class="sw" style="--c:${okColor(it.color)}"></i>`:''}<input class="ename" data-kind="${kind}" data-id="${esc(it.id)}" value="${esc(it.name)}" maxlength="30" aria-label="Nom (modifiable)"><button class="icon" data-del="${kind}" data-id="${esc(it.id)}" aria-label="Supprimer ${esc(it.name)}">${I.trash}</button></div>`).join('')}
   <form class="erow add" data-add="${kind}"><input placeholder="${kind==='pay'?'Nouveau moyen…':'Nouvelle catégorie…'}" maxlength="30" aria-label="Nom à ajouter"><button class="primary">Ajouter</button></form></section>`}
+function syncLabel(){return !navigator.onLine?'Hors ligne · en attente':C.user?(C.pending?'Synchronisation…':'Synchronisé'):(C.failed?'Hors ligne':'Connexion…')}
+function accCard(){
+  if(C.user)return `<section class="card acc"><h2>Compte <span class="badge">${esc(syncLabel())}</span></h2><p class="mut">Connecté avec <b>${esc(C.user.email||'')}</b>. Vos opérations, catégories et budgets se synchronisent automatiquement et en temps réel avec tous les téléphones connectés à ce compte.</p><button id="logoutBtn">Se déconnecter</button></section>`;
+  if(MODE==='cloud')return `<section class="card acc"><h2>Compte</h2><p class="mut">Connexion au compte en cours… Vos modifications sont gardées sur ce téléphone et seront envoyées dès que la connexion revient.</p></section>`;
+  return `<section class="card acc"><h2>Compte</h2><p class="mut">Vos données sont uniquement sur ce téléphone. Créez un compte (ou connectez-vous) pour les retrouver et les synchroniser sur un autre téléphone.</p><button class="primary" id="goAuth">Créer un compte / Se connecter</button></section>`}
 function lockCard(){
   const bioTxt=BIO_OK?", avec en plus l'empreinte digitale ou la reconnaissance faciale du téléphone":'';
   if(!L)return `<section class="card"><h2>Verrouillage</h2><p class="mut">Demandez un code ou un schéma à chaque ouverture de l'application${bioTxt}.</p><div class="btns"><button data-lock="pin">Définir un code</button><button data-lock="pattern">Définir un schéma</button></div></section>`;
@@ -457,14 +497,14 @@ function abCard(){
 function abBanner(){return AB.handle&&AB.status!=='ok'?`<button class="abbar" id="abResume">${AB.status==='error'?'Sauvegarde automatique interrompue · Touchez pour choisir un fichier':'Sauvegarde automatique en pause · Touchez pour la reprendre'}</button>`:''}
 function vSet(){
   const inst=deferred&&!standalone()?`<button class="primary" id="installBtn">Installer Mon Budget</button>`:standalone()?`<p class="mut">L'application est installée sur ce téléphone.</p>`:`<p class="mut">Dans Chrome ou Samsung Internet, ouvrez le menu (⋮ ou ≡) puis « Ajouter à l'écran d'accueil » ou « Installer l'application ».</p>`;
-  return `<div class="band top"><h1>Réglages</h1>${lockCard()}${abCard()}
-  <section class="card"><h2>Partager l'application</h2><p class="mut">Envoyez le lien (WhatsApp, SMS…) à une autre personne. Chaque téléphone garde ses propres données : elle commencera avec une application vide et ne verra jamais vos opérations.</p><button class="primary" id="shareBtn">Partager le lien</button></section>
+  return `<div class="band top"><h1>Réglages</h1>${accCard()}${lockCard()}${abCard()}
+  <section class="card"><h2>Partager l'application</h2><p class="mut">Envoyez le lien (WhatsApp, SMS…) à une autre personne. Elle créera son propre compte et ne verra jamais vos opérations.</p><button class="primary" id="shareBtn">Partager le lien</button></section>
   <section class="card"><h2>Installer sur ce téléphone</h2>${inst}</section>
   ${editList('out','Catégories de dépenses',S.cats.filter(c=>c.type==='out'))}${editList('in',"Catégories d'entrées",S.cats.filter(c=>c.type==='in'))}${editList('pay','Moyens de paiement',S.pays)}
   <section class="card"><h2>Sauvegarde manuelle</h2><p class="mut">Exportez une copie quand vous voulez, ou restaurez une sauvegarde (un fichier exporté ou le fichier de sauvegarde automatique) sur un nouveau téléphone.</p>
   <div class="btns"><button id="expBtn">Exporter la sauvegarde</button><label class="btn">Importer une sauvegarde<input type="file" id="impFile" accept=".json,application/json" hidden></label><button id="csvBtn">Exporter pour Excel (.csv)</button></div></section>
-  <section class="card warnz"><h2>Effacer toutes les données</h2><p class="mut">Supprime toutes les opérations, catégories ajoutées, budgets et le verrouillage de ce téléphone.</p><button class="danger-btn" id="wipeBtn">Tout effacer</button></section>
-  <p class="ver mut">Mon Budget · version 1.1 · ${S.tx.length} opération${S.tx.length>1?'s':''} enregistrée${S.tx.length>1?'s':''}</p></div>`}
+  <section class="card warnz"><h2>Effacer toutes les données</h2><p class="mut">${C.user?'Supprime toutes les opérations, catégories ajoutées et budgets de votre compte, sur tous vos téléphones, ainsi que le verrouillage de ce téléphone.':'Supprime toutes les opérations, catégories ajoutées, budgets et le verrouillage de ce téléphone.'}</p><button class="danger-btn" id="wipeBtn">Tout effacer</button></section>
+  <p class="ver mut">Mon Budget · version 2.0 · ${S.tx.length} opération${S.tx.length>1?'s':''} enregistrée${S.tx.length>1?'s':''}</p></div>`}
 function addItem(kind,name){name=String(name||'').trim().slice(0,30);if(!name)return null;
   if(kind==='pay'){if(S.pays.some(p=>p.name.toLowerCase()===name.toLowerCase())){toast('Ce moyen de paiement existe déjà');return null}const p={id:uid(),name};S.pays.push(p);save();return p.id}
   if(S.cats.some(c=>c.type===kind&&c.name.toLowerCase()===name.toLowerCase())){toast('Cette catégorie existe déjà');return null}
@@ -517,7 +557,7 @@ V.addEventListener('click',e=>{const t=e.target.closest('button,[data-i]');if(!t
   if(t.dataset.i!=null&&CH){CH.go(+t.dataset.i);return render()}
   if(t.dataset.del)return delItem(t.dataset.del,t.dataset.id);
   if(t.dataset.lock)return lockAction(t.dataset.lock);
-  const A={shareBtn:share,installBtn:install,expBtn:exportJSON,csvBtn:exportCSV,wipeBtn:wipe,goAdd:()=>openTx(),abOn:abPick,abPick:abPick,abOff:abOff,abResume:abResume,abNow:async()=>{if(await writeBackup(true))toast('Sauvegarde effectuée')},abLater:()=>{S.abLater=1;save();render()}};if(A[t.id])A[t.id]()});
+  const A={shareBtn:share,installBtn:install,expBtn:exportJSON,csvBtn:exportCSV,wipeBtn:wipe,goAdd:()=>openTx(),abOn:abPick,abPick:abPick,abOff:abOff,abResume:abResume,abNow:async()=>{if(await writeBackup(true))toast('Sauvegarde effectuée')},abLater:()=>{S.abLater=1;save();render()},logoutBtn:()=>logout(),goAuth:()=>showAuth(true)};if(A[t.id])A[t.id]()});
 V.addEventListener('change',e=>{const t=e.target;
   if(t.id==='bOn'){S.budget.on=t.checked;save();return render()}
   if(t.id==='bTot'){S.budget.total=num(t.value);save();return render()}
@@ -586,7 +626,7 @@ async function tryBio(){if(await bioCheck()&&(LK.mode==='unlock'||LK.mode==='ver
 const lock=$('#lock'),pat=$('#lkPat');
 $('#lkPad').innerHTML=['1','2','3','4','5','6','7','8','9','','0','del'].map(k=>k?`<button type="button" data-k="${k}" aria-label="${k==='del'?'Effacer':k}">${k==='del'?I.del:k}</button>`:'<span></span>').join('');
 pat.innerHTML='<svg id="patSvg"></svg>'+Array.from({length:9},(_,i)=>`<span class="pd" data-p="${i}"></span>`).join('');
-let seq=[],drawing=false,ptr=null,C=[];
+let seq=[],drawing=false,ptr=null,PC=[];
 function lockUI(mode,type,cb){LK.mode=mode;LK.type=type;LK.first=null;LK.buf='';LK.cb=cb;closeModal(true);$('#dlg').hidden=true;paintLock()}
 function lkDone(ok){lock.hidden=true;const cb=LK.cb;LK.mode=null;LK.cb=null;LK.buf='';cb&&cb(ok)}
 function paintLock(){
@@ -598,7 +638,7 @@ function paintLock(){
   $('#lkBio').hidden=!(L&&L.bio&&BIO_OK&&(LK.mode==='unlock'||LK.mode==='verify'));
   $('#lkOk').hidden=!(pin&&LK.mode==='set1');$('#lkCancel').hidden=LK.mode==='unlock';$('#lkForgot').hidden=LK.mode!=='unlock';
   $('#lkForgot').textContent=L&&L.type==='pattern'?'Schéma oublié ?':'Code oublié ?';
-  paintDots();seq=[];if(!pin)requestAnimationFrame(()=>{C=centers();patPaint()});
+  paintDots();seq=[];if(!pin)requestAnimationFrame(()=>{PC=centers();patPaint()});
   if(Date.now()<LK.until)countdown()}
 function need(){return LK.mode==='set1'?0:LK.mode==='set2'?LK.first.length:L?L.len:0}
 function paintDots(){const n=need()||Math.max(4,LK.buf.length);$('#lkDots').innerHTML=Array.from({length:n},(_,i)=>`<i class="${i<LK.buf.length?'f':''}"></i>`).join('');$('#lkOk').disabled=LK.buf.length<4}
@@ -620,11 +660,12 @@ addEventListener('keydown',e=>{if(lock.hidden||!$('#dlg').hidden)return;if(/^\d$
 $('#lkOk').onclick=()=>{if(LK.buf.length>=4)lkSubmit(LK.buf)};
 $('#lkCancel').onclick=()=>lkDone(false);
 $('#lkBio').onclick=tryBio;
-$('#lkForgot').onclick=async()=>{if(await ask("Sans le code ou le schéma, la seule solution est d'effacer toutes les données de l'application sur ce téléphone. Vous pourrez ensuite importer une sauvegarde exportée. Continuer ?",{ok:'Tout effacer',danger:1})){S=fresh();L=null;save();saveLock();lkDone(true);toast("Données effacées. L'application est réinitialisée.")}};
+$('#lkForgot').onclick=async()=>{if(C.user){if(await ask("Vos données sont en sécurité dans votre compte. Pour retirer le code, l'application va se déconnecter et vider ce téléphone. Reconnectez-vous ensuite avec votre e-mail et votre mot de passe.",{ok:'Se déconnecter'})){L=null;saveLock();lkDone(false);logout(true)}return}
+  if(await ask("Sans le code ou le schéma, la seule solution est d'effacer toutes les données de l'application sur ce téléphone. Vous pourrez ensuite importer une sauvegarde exportée. Continuer ?",{ok:'Tout effacer',danger:1})){S=fresh();L=null;save();saveLock();lkDone(true);toast("Données effacées. L'application est réinitialisée.")}};
 function centers(){const r=pat.getBoundingClientRect();return $$('.pd',pat).map(d=>{const b=d.getBoundingClientRect();return{x:b.left+b.width/2-r.left,y:b.top+b.height/2-r.top}})}
-function patPaint(){const s=$('#patSvg');s.innerHTML=seq.length?`<polyline points="${seq.map(i=>C[i].x.toFixed(1)+','+C[i].y.toFixed(1)).join(' ')}${drawing&&ptr?' '+ptr.x.toFixed(1)+','+ptr.y.toFixed(1):''}"/>`:'';$$('.pd',pat).forEach((d,i)=>d.classList.toggle('on',seq.includes(i)))}
-function hit(e){const r=pat.getBoundingClientRect();ptr={x:e.clientX-r.left,y:e.clientY-r.top};const rad=r.width/7;C.forEach((c,i)=>{if(!seq.includes(i)&&Math.hypot(c.x-ptr.x,c.y-ptr.y)<rad)seq.push(i)})}
-pat.addEventListener('pointerdown',e=>{if(Date.now()<LK.until)return;e.preventDefault();C=centers();seq=[];drawing=true;try{pat.setPointerCapture(e.pointerId)}catch(_){}pat.classList.remove('err');$('#lkS').classList.remove('err');hit(e);patPaint()});
+function patPaint(){const s=$('#patSvg');s.innerHTML=seq.length?`<polyline points="${seq.map(i=>PC[i].x.toFixed(1)+','+PC[i].y.toFixed(1)).join(' ')}${drawing&&ptr?' '+ptr.x.toFixed(1)+','+ptr.y.toFixed(1):''}"/>`:'';$$('.pd',pat).forEach((d,i)=>d.classList.toggle('on',seq.includes(i)))}
+function hit(e){const r=pat.getBoundingClientRect();ptr={x:e.clientX-r.left,y:e.clientY-r.top};const rad=r.width/7;PC.forEach((c,i)=>{if(!seq.includes(i)&&Math.hypot(c.x-ptr.x,c.y-ptr.y)<rad)seq.push(i)})}
+pat.addEventListener('pointerdown',e=>{if(Date.now()<LK.until)return;e.preventDefault();PC=centers();seq=[];drawing=true;try{pat.setPointerCapture(e.pointerId)}catch(_){}pat.classList.remove('err');$('#lkS').classList.remove('err');hit(e);patPaint()});
 pat.addEventListener('pointermove',e=>{if(drawing){hit(e);patPaint()}});
 const patEnd=()=>{if(!drawing)return;drawing=false;ptr=null;patPaint();const v=seq.join('');
   if(seq.length<4){if(seq.length)lkErr('Reliez au moins 4 points');setTimeout(()=>{seq=[];patPaint()},700);return}
@@ -641,12 +682,97 @@ let hiddenAt=0;
 document.addEventListener('visibilitychange',()=>{if(document.hidden){hiddenAt=Date.now();return}
   if(L&&unlocked&&!LK.mode&&Date.now()-hiddenAt>60000){unlocked=false;V.innerHTML='';lockUI('unlock',L.type,()=>{unlocked=true;render()});if(L.bio&&BIO_OK)setTimeout(tryBio,350)}});
 
+/* ---------- Compte et synchronisation (Firebase) ---------- */
+const FB='https://www.gstatic.com/firebasejs/13.2.0/';
+const FCFG={apiKey:"AIzaSyA56zaEGQhP9_F0Em3jX_uLk9-k2cyzN-E",authDomain:"mon-budget-ef39d.firebaseapp.com",projectId:"mon-budget-ef39d",storageBucket:"mon-budget-ef39d.firebasestorage.app",messagingSenderId:"88710353640",appId:"1:88710353640:web:468f288a07bf0e892c2f5d"};
+const txFields=t=>({type:t.type,amount:t.amount,cat:t.cat,pay:t.pay,date:t.date,note:t.note||'',ts:t.ts||0});
+const metaOf=()=>({cats:S.cats,pays:S.pays,budget:S.budget});
+function setMode(m){MODE=m;try{m?localStorage.setItem('monbudget.mode',JSON.stringify(m)):localStorage.removeItem('monbudget.mode')}catch(e){}}
+function pushDiff(){
+  if(!C.user||!C.db)return;const F=C.F,uid=C.user.uid,ops=[],cur=new Map(S.tx.map(t=>[t.id,t]));
+  for(const[id,t]of cur){const f=txFields(t),j=JSON.stringify(f);if(C.known.get(id)!==j){ops.push(b=>b.set(F.doc(C.db,'users',uid,'tx',id),f));C.known.set(id,j)}}
+  for(const id of[...C.known.keys()])if(!cur.has(id)){ops.push(b=>b.delete(F.doc(C.db,'users',uid,'tx',id)));C.known.delete(id)}
+  if(C.metaReady){const m=JSON.stringify(metaOf());if(C.knownMeta!==m){const mo=JSON.parse(m);ops.push(b=>b.set(F.doc(C.db,'users',uid,'meta','state'),mo));C.knownMeta=m}}
+  for(let i=0;i<ops.length;i+=400){const b=F.writeBatch(C.db);ops.slice(i,i+400).forEach(f=>f(b));b.commit().catch(syncErr)}
+}
+function syncErr(e){console.error(e);toast('Synchronisation impossible : '+((e&&e.code)||'erreur'),{warn:1})}
+function stopSync(){C.unsubs.forEach(u=>{try{u()}catch(e){}});C.unsubs=[]}
+function startSync(u){
+  const F=C.F,uid=u.uid,prev=load('monbudget.uid');
+  if(prev&&prev!==uid)S=fresh();
+  const merge=(!prev&&S.tx.length>0)||(prev===uid&&!!S.dirty);
+  delete S.dirty;try{localStorage.setItem('monbudget.uid',JSON.stringify(uid))}catch(e){}
+  C.known=new Map();C.knownMeta=null;C.metaReady=merge&&prev===uid;
+  if(merge)pushDiff();
+  const metaRef=F.doc(C.db,'users',uid,'meta','state'),txCol=F.collection(C.db,'users',uid,'tx');
+  C.unsubs.push(F.onSnapshot(metaRef,s=>{
+    if(!s.exists()){if(!s.metadata.fromCache&&!C.metaReady){C.metaReady=true;pushDiff()}return}
+    const d=s.data();if(Array.isArray(d.cats)&&d.cats.length)S.cats=d.cats;if(Array.isArray(d.pays)&&d.pays.length)S.pays=d.pays;
+    S.budget=d.budget||{on:false,total:0,cats:{}};S.budget.cats=S.budget.cats||{};
+    C.knownMeta=JSON.stringify(metaOf());C.metaReady=true;saveLocal();render()},syncErr));
+  C.unsubs.push(F.onSnapshot(txCol,{includeMetadataChanges:true},snap=>{
+    C.pending=snap.metadata.hasPendingWrites;
+    S.tx=snap.docs.map(d=>{const x=d.data();return{...x,id:d.id,amount:Math.round(+x.amount)||0}});
+    C.known=new Map(S.tx.map(t=>[t.id,JSON.stringify(txFields(t))]));
+    saveLocal();render()},syncErr));
+}
+function onUser(u){
+  stopSync();C.user=u||null;
+  if(u){setMode('cloud');hideAuth();startSync(u)}
+  else if(MODE!=='local')showAuth();
+  render()}
+async function cloudInit(){
+  try{
+    const[A,Au,F]=await Promise.all([import(FB+'firebase-app.js'),import(FB+'firebase-auth.js'),import(FB+'firebase-firestore.js')]);
+    Object.assign(C,{A,Au,F,failed:false});
+    const app=A.getApps().length?A.getApp():A.initializeApp(FCFG);
+    C.auth=Au.getAuth(app);C.auth.languageCode='fr';
+    if(!C.db){try{C.db=F.initializeFirestore(app,{localCache:F.persistentLocalCache({tabManager:F.persistentMultipleTabManager()}),ignoreUndefinedProperties:true})}
+      catch(e){C.db=F.getFirestore(app)}}
+    Au.onAuthStateChanged(C.auth,onUser);
+  }catch(e){console.error(e);C.failed=true;render()}
+}
+async function logout(skipAsk){
+  if(!skipAsk&&!await ask("Se déconnecter ? Les données de ce compte seront retirées de ce téléphone. Elles restent dans votre compte et reviendront à la prochaine connexion.",{ok:'Se déconnecter'}))return;
+  stopSync();try{await C.Au.signOut(C.auth)}catch(e){}
+  try{await C.F.terminate(C.db);await C.F.clearIndexedDbPersistence(C.db)}catch(e){}
+  [KEY,'monbudget.uid','monbudget.mode'].forEach(k=>{try{localStorage.removeItem(k)}catch(e){}});
+  location.reload()}
+/* Écran de connexion */
+const au=$('#auth');let auMode='in';
+function showAuth(fromSettings){au.hidden=false;$('#auClose').hidden=!(fromSettings||MODE==='local');$('#auLocal').hidden=MODE==='local';paintAuth()}
+function hideAuth(){au.hidden=true}
+function auMsg(m,ok){const e=$('#auErr');e.textContent=m||'';e.classList.toggle('ok',!!ok)}
+function paintAuth(){const up=auMode==='up';
+  $$('#auSeg button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.m===auMode));
+  $('#auPass2W').hidden=!up;$('#auGo').textContent=up?'Créer mon compte':'Se connecter';$('#auForgot').hidden=up;
+  $('#auPass').setAttribute('autocomplete',up?'new-password':'current-password');
+  $('#auS').textContent=up?'Créez votre compte : vos données seront sauvegardées et synchronisées entre vos téléphones.':'Connectez-vous pour retrouver vos comptes sur tous vos téléphones.';auMsg('')}
+function authText(e){const c=(e&&e.code)||'';return({'auth/invalid-email':'Adresse e-mail invalide.','auth/missing-email':'Saisissez votre adresse e-mail.','auth/missing-password':'Saisissez votre mot de passe.','auth/weak-password':'Le mot de passe doit contenir au moins 6 caractères.','auth/email-already-in-use':'Un compte existe déjà avec cet e-mail : utilisez « Connexion ».','auth/invalid-credential':'E-mail ou mot de passe incorrect.','auth/wrong-password':'E-mail ou mot de passe incorrect.','auth/user-not-found':'E-mail ou mot de passe incorrect.','auth/too-many-requests':'Trop d\'essais. Réessayez dans quelques minutes.','auth/network-request-failed':'Pas de connexion Internet.','auth/user-disabled':'Ce compte a été désactivé.'})[c]||('Erreur : '+(c||'inconnue'))}
+$('#auSeg').onclick=e=>{const b=e.target.closest('[data-m]');if(b){auMode=b.dataset.m;paintAuth()}};
+$('#auShow').onclick=()=>{const t=$('#auPass').type==='password'?'text':'password';$('#auPass').type=t;$('#auPass2').type=t;$('#auShow').textContent=t==='text'?'Masquer':'Afficher'};
+$('#auForm').onsubmit=async e=>{e.preventDefault();const em=$('#auEmail').value.trim(),pw=$('#auPass').value,go=$('#auGo');
+  if(!C.Au){auMsg(C.failed?'Pas de connexion Internet. Réessayez une fois connecté.':'Chargement, réessayez dans un instant.');if(C.failed)cloudInit();return}
+  if(!em)return auMsg('Saisissez votre adresse e-mail.');if(pw.length<6)return auMsg('Le mot de passe doit contenir au moins 6 caractères.');
+  if(auMode==='up'&&pw!==$('#auPass2').value)return auMsg('Les deux mots de passe ne correspondent pas.');
+  go.disabled=true;go.textContent='Patientez…';
+  try{if(auMode==='up')await C.Au.createUserWithEmailAndPassword(C.auth,em,pw);else await C.Au.signInWithEmailAndPassword(C.auth,em,pw);
+    $('#auPass').value='';$('#auPass2').value='';toast(auMode==='up'?'Compte créé : vos données sont synchronisées':'Connecté : synchronisation en cours')}
+  catch(err){auMsg(authText(err))}finally{go.disabled=false;go.textContent=auMode==='up'?'Créer mon compte':'Se connecter'}};
+$('#auForgot').onclick=async()=>{const em=$('#auEmail').value.trim();if(!em)return auMsg("Saisissez d'abord votre e-mail ci-dessus.");if(!C.Au)return auMsg('Pas de connexion Internet.');
+  try{await C.Au.sendPasswordResetEmail(C.auth,em);auMsg('Si un compte existe, un e-mail de réinitialisation a été envoyé à '+em+'. Vérifiez aussi les spams.',1)}catch(err){auMsg(authText(err))}};
+$('#auLocal').onclick=async()=>{if(await ask("Utiliser sans compte ? Vos données resteront uniquement sur ce téléphone, sans synchronisation. Vous pourrez créer un compte plus tard dans Réglages.",{ok:'Continuer sans compte'})){setMode('local');hideAuth();render()}};
+$('#auClose').onclick=()=>hideAuth();
+addEventListener('online',()=>render());addEventListener('offline',()=>render());
+
 /* ---------- Démarrage ---------- */
 addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferred=e;if(curV==='accueil'||curV==='reglages')render()});
 addEventListener('appinstalled',()=>{deferred=null;render();toast('Mon Budget est installée sur ce téléphone')});
 bioAvail().then(v=>{BIO_OK=v;if(curV==='reglages')render();if(v&&L&&L.bio&&LK.mode==='unlock'){$('#lkBio').hidden=false;tryBio()}});
 if(L)lockUI('unlock',L.type,()=>{unlocked=true;render()});else render();
 abInit();
+if(MODE!=='local'&&!load('monbudget.uid'))showAuth();
+cloudInit();
 if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol))navigator.serviceWorker.register('sw.js').catch(()=>{});
 }
 </script>

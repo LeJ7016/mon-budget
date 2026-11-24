@@ -1,5 +1,5 @@
 // Mon Budget — service worker : fonctionnement hors ligne
-const V = 'mon-budget-v3';
+const V = 'mon-budget-v4';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png'];
 
 self.addEventListener('install', e => {
@@ -33,7 +33,7 @@ self.addEventListener('fetch', e => {
   }
 
   // Fichiers de l'application et polices : cache d'abord
-  if (u.origin === location.origin || /fonts\.(googleapis|gstatic)\.com$/.test(u.hostname)) {
+  if (u.origin === location.origin || /fonts\.(googleapis|gstatic)\.com$/.test(u.hostname) || (u.hostname === 'www.gstatic.com' && u.pathname.startsWith('/firebasejs/'))) {
     e.respondWith(caches.match(r).then(m => m || fetch(r).then(res => put(r, res))));
   }
 });
